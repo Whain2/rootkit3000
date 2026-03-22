@@ -11,3 +11,22 @@ module:
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
+
+# auxiliary functions
+
+unload:
+	sudo rmmod $(MODULE_NAME) || true
+
+load: module unload
+	sudo insmod $(MODULE_NAME).ko
+
+log:
+	sudo dmesg | tail -30
+
+help:
+	@echo "Comands:"
+	@echo "  module   - Build kernel module"
+	@echo "  clean    - Remove build"
+	@echo "  load     - Load module"
+	@echo "  unload   - Unload module"
+	@echo "  log      - Show log messages"
