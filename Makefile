@@ -9,7 +9,7 @@ KDIR := /lib/modules/$(shell uname -r)/build
 CC := gcc
 CFLAGS := -Wall -Wextra -O2
 
-.PHONY: all module client clean load unload log help
+.PHONY: all module client clean load unload log help test
 
 all: module client
 
@@ -34,6 +34,9 @@ load: module unload
 log:
 	sudo dmesg | tail -30
 
+test:
+	sudo bash ./test.sh
+
 help:
 	@echo "Comands:"
 	@echo "  all      - Build module and client"
@@ -43,3 +46,4 @@ help:
 	@echo "  load     - Load module"
 	@echo "  unload   - Unload module"
 	@echo "  log      - Show log messages"
+	@echo "  test     - Test module"

