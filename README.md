@@ -25,7 +25,7 @@ make
 ## Использование
 
 ```bash
-sudo insmod kernmod.ko
+make load
 
 sudo ./client hide-file /path/to/file
 sudo ./client unhide-file /path/to/file
@@ -41,7 +41,7 @@ sudo ./client disallow-pid 5678
 
 sudo ./client status
 
-sudo rmmod kernmod
+make unload
 ```
 
 ⚠️ Перед `rmmod` необходимо сделать `unhide-module kernmod`, если модуль был скрыт.
@@ -59,6 +59,13 @@ make test
 * скрытие модулей
 * доверенные PID
 * граничные случаи и ошибки
+
+## Все команды
+
+```bash
+make help        — все команды Make файла
+sudo ./client    — все команды клиента
+```
 
 ## Структура проекта
 
